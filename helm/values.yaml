@@ -1,6 +1,6 @@
 image:
   repository: 730335365330.dkr.ecr.us-east-1.amazonaws.com/tech-challenge-2-app
-  tag: latest
+  tag: 879047b
 
 replicas: 1
 
