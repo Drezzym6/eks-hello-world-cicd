@@ -1,0 +1,18 @@
+image:
+  repository: 730335365330.dkr.ecr.us-east-1.amazonaws.com/tech-challenge-2-app
+  tag: latest
+
+replicas: 1
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "250m"
+    memory: "256Mi"
+
+hpa:
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilization: 50

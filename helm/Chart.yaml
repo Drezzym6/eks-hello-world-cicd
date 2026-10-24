@@ -1,0 +1,5 @@
+apiVersion: v2
+name: hello-world-app
+description: Hello World app Helm chart (GitOps branch, deployed via Argo CD)
+version: 0.1.0
+appVersion: "1.0"
