@@ -3,7 +3,7 @@ const app = express();
 const port = 8080;
 
 app.get('/', (req, res) => {
-  res.send('Hello, World! (v2 - deployed via Jenkins CI/CD)');
+  res.send('Hello, World! (deployed via GitHub Actions + Argo CD GitOps)');
 });
 
 app.listen(port, () => {
