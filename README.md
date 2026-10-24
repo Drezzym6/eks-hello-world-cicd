@@ -1,300 +1,158 @@
-# Tech Challenge 2: Hello World App on EKS with Jenkins CI/CD + Autoscaling
+# Tech Challenge 1 — Containerized React/Express App on AWS ECS Fargate
 
-A simple "Hello, World!" Node.js app, containerized, deployed to a fully
-autoscaling Kubernetes cluster on AWS EKS, with a Jenkins pipeline that
-builds, pushes, and deploys automatically on every push to `main`.
+A React frontend and Express backend, containerized with Docker, deployed to AWS ECS on Fargate via Terraform, with CI/CD automated through a self-hosted Jenkins pipeline. The app autoscales under load and is reachable through a single public Application Load Balancer (ALB) URL.
 
-**Live app URL:** http://a75333337a516452a8ab1fdcb1325417-578362702.us-east-1.elb.amazonaws.com
+**Live app:** http://tech-challenge-1-alb-62754989.us-east-1.elb.amazonaws.com
+**Jenkins:** http://18.235.167.253:8080
 
 ---
 
-## Architecture
+## 1. Architecture Overview
 
-![Architecture Diagram](docs/architecture-diagram.png)
+![Architecture Diagram](docs/architecture.png)
 
 ```
-Internet User
-      |
-      | HTTP
-      v
-Application Load Balancer (public, port 80)
-      |
-      v
-VPC
-  |-- Public Subnets  -> Internet Gateway, NAT Gateway
-  |-- Private Subnets -> EKS Cluster
-        |-- Managed Node Group (t3.small, 1 node -> scalable to 4)
-        |     |-- scaled by Cluster Autoscaler (IRSA, watches ASG)
-        |-- Horizontal Pod Autoscaler (1 pod/node -> 3 pods/node, 50% CPU)
-      |
-      v
-CloudWatch Logs (pod logs)
-
 GitHub (main branch)
       |
       | webhook (push)
       v
 Jenkins (EC2, Docker-in-Docker)
       |
-      | build & push images -> Amazon ECR
-      | helm upgrade / kubectl set image -> EKS Cluster
+      | build images -> push to ECR -> force new ECS deployment
       v
-Amazon ECR (app repo)
-
-GitHub (gitops branch) -- required alternative, no Jenkins involved
-      |
-      | push
-      v
-GitHub Actions (CI) -- build & push via OIDC, no static AWS keys
+Amazon ECR (frontend + backend repos)
       |
       v
-Amazon ECR
+Amazon ECS Cluster (Fargate)
+  |-- Frontend Service (min 1 / desired 1 / max 4 tasks)
+  |-- Backend  Service (min 1 / desired 1 / max 4 tasks)
       |
       v
-Argo CD (CD) -- watches ECR/Git, auto-syncs new images into EKS
+Application Load Balancer (public, port 80)
+  |-- default action        -> Frontend target group
+  |-- path pattern /api,/api/* -> Backend target group
 ```
 
-The cluster runs on a t3.small managed node group (1 node active by
-default, scalable to 4 via Cluster Autoscaler). Pods scale horizontally
-via an HPA (1 to 3 pods per node, triggered at 50% CPU utilization).
-Jenkins runs on its own EC2 instance (manually provisioned, outside
-Terraform) and talks to the EKS cluster using an IAM role mapped into
-the cluster's `aws-auth` ConfigMap, scoped to a custom least-privilege
-Kubernetes ClusterRole rather than full admin access.
-
-A separate `gitops` branch implements the required GitOps alternative:
-GitHub Actions builds and pushes images to ECR via OIDC (no static AWS
-keys), and Argo CD watches the Helm chart and auto-syncs new images into
-the cluster.
+- **ECS Fargate** runs both services — no EC2 instances to patch or manage for the app itself, AWS handles the underlying compute.
+- **Each service**: 0.5 vCPU / 1 GB RAM per task, runs in private subnets (not directly internet-reachable — only the ALB is public).
+- **Networking**: custom VPC, 2 public subnets (ALB + NAT Gateway) + 2 private subnets (ECS tasks), Internet Gateway for public traffic, NAT Gateway so private-subnet tasks can still reach the internet (e.g. to pull images).
+- **Autoscaling**: AWS Application Auto Scaling, target-tracking policy on ECS Service Average CPU Utilization, target = 50%. AWS automatically raises/lowers `DesiredCount` between 1 and 4 tasks to hold CPU near that target — no manual step scaling rules to maintain.
+- **CI/CD**: Jenkins (self-managed, running as a Docker container on its own EC2 instance) — not built with Terraform, since a CI server is treated as long-lived infrastructure that's configured once by hand rather than reprovisioned on every apply. Jenkins builds both Docker images, pushes them to ECR, then forces a new ECS deployment so the services pick up the new images.
+- **CORS**: the backend's `config.js` allow-list is set to the ALB's public DNS name, since the frontend and backend are served from different paths on the same load balancer and the browser enforces CORS on cross-origin API calls.
 
 ---
 
-## Prerequisites
-
-- Docker
-- AWS CLI v2, configured with credentials that have sufficient IAM
-  permissions to create the resources below
-- Terraform >= 1.5.0
-- kubectl
-- Helm
-- Node.js / npm (for local app development)
-
----
-
-## Repository Structure
+## 2. Repository Layout
 
 ```
 .
-├── app/              # Node.js "Hello, World!" application
-├── terraform/        # All AWS infrastructure (EKS, VPC, IAM, ECR, Jenkins EC2)
-├── k8s/              # Kubernetes manifests (Deployment, Service, HPA, RBAC)
-├── Jenkinsfile        # CI/CD pipeline definition
-├── docs/              # Architecture diagram
-└── screenshots/        # Proof-of-work screenshots, organized by phase
+├── backend/            # Express API (Node 16), Dockerfile, config.js
+├── frontend/           # React app (Node 18), Dockerfile, config.js
+├── terraform/          # All AWS infrastructure as code
+│   ├── provider.tf
+│   ├── networking.tf
+│   ├── ecs.tf
+│   ├── ecr.tf
+│   ├── security.tf
+│   ├── alb.tf
+│   ├── autoscaling.tf
+│   ├── jenkins.tf
+│   └── variables.tf
+├── Jenkinsfile          # CI/CD pipeline definition (main branch)
+└── README.md
 ```
 
 ---
 
-## Setup & Deployment
+## 3. Running It Locally
 
-### 1. Provision the infrastructure
+```bash
+# Backend
+cd backend
+npm ci
+npm start                # runs on localhost:8080
+
+# Frontend (separate terminal)
+cd frontend
+npm ci
+npm start                # runs on localhost:3000, calls localhost:8080
+```
+
+Or with Docker:
+
+```bash
+docker build -t backend-app ./backend
+docker build -t frontend-app ./frontend
+docker run -d --name backend  -p 8080:8080 backend-app
+docker run -d --name frontend -p 3000:3000 frontend-app
+```
+
+Both should return a page showing `SUCCESS` and a GUID when working correctly.
+
+---
+
+## 4. Deploying the Infrastructure (Terraform)
 
 ```bash
 cd terraform
 terraform init
-terraform plan
-terraform apply
+terraform plan  -var="my_ip=<your-ip>/32"
+terraform apply -var="my_ip=<your-ip>/32"
 ```
 
-This creates: a VPC with 2 public + 2 private subnets across 2
-Availability Zones, an EKS cluster with a managed node group, an ECR
-repository for the app image, IAM roles (cluster, node group, Jenkins
-instance, Cluster Autoscaler via IRSA), security groups, and a Jenkins
-EC2 instance with an Elastic IP.
+This provisions, in order: the VPC and subnets, ECR repositories, IAM roles, security groups, the ECS cluster/services/task definitions, the ALB and its listener rules, the autoscaling policies, and the Jenkins EC2 instance (with an attached Elastic IP so its public address survives a stop/start).
 
-### 2. Connect kubectl to the new cluster
+**Note:** `.terraform/` and `*.tfstate` are git-ignored — state is never committed.
+
+---
+
+## 5. Jenkins & CI/CD Pipeline
+
+Jenkins runs as a Docker container on a dedicated EC2 instance (Amazon Linux 2023, `t3.small`), provisioned once by hand rather than through Terraform recreations, since a CI server is meant to persist across infrastructure changes to the app itself.
+
+**Pipeline (`Jenkinsfile`), triggered by a GitHub webhook on every push to `main`:**
+1. Checkout the repo
+2. Build the backend and frontend Docker images
+3. Authenticate to Amazon ECR
+4. Tag and push both images
+5. Force a new deployment on both ECS services, so they pull the freshly pushed images
+
+This means a plain `git push` to `main` is the entire deploy trigger — no manual AWS Console steps required after the initial setup.
+
+---
+
+## 6. Load Testing & Autoscaling Results
+
+Load was generated from a local machine using [siege](https://github.com/JoeDog/siege), which drives raw concurrent HTTP requests against the public ALB URL:
 
 ```bash
-aws eks update-kubeconfig --name tech-challenge-2-eks --region us-east-1
-kubectl get nodes
+siege -c 250 -t 5M http://tech-challenge-1-alb-62754989.us-east-1.elb.amazonaws.com
 ```
 
-### 3. Install metrics-server (required for the HPA to read real CPU data)
-
-```bash
-kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
-```
-
-### 4. Deploy the application
-
-```bash
-cd k8s
-kubectl apply -f deployment.yaml
-kubectl apply -f service.yaml
-kubectl apply -f hpa.yaml
-kubectl get svc hello-world-service
-```
-
-The `EXTERNAL-IP` column gives you the public LoadBalancer URL.
-
-### 5. Wire up Jenkins RBAC access to the cluster
-
-```bash
-kubectl apply -f k8s/jenkins-rbac.yaml
-kubectl apply -f k8s/aws-auth.yaml
-```
-
-This maps the Jenkins EC2 instance's IAM role into the cluster via a
-custom `jenkins-deployer` ClusterRole — scoped to only Deployments,
-Pods, Services, and HorizontalPodAutoscalers, not full cluster-admin.
-
-### 6. Install Cluster Autoscaler
-
-```bash
-helm repo add autoscaler https://kubernetes.github.io/autoscaler
-helm repo update
-
-helm install cluster-autoscaler autoscaler/cluster-autoscaler \
-  --namespace kube-system \
-  --set autoDiscovery.clusterName=tech-challenge-2-eks \
-  --set awsRegion=us-east-1 \
-  --set rbac.serviceAccount.create=true \
-  --set rbac.serviceAccount.name=cluster-autoscaler \
-  --set "rbac.serviceAccount.annotations.eks\.amazonaws\.com/role-arn=arn:aws:iam::730335365330:role/tech-challenge-2-cluster-autoscaler-role" \
-  --set extraArgs.balance-similar-node-groups=true \
-  --set extraArgs.skip-nodes-with-system-pods=false
-```
-
-This uses IRSA (IAM Roles for Service Accounts) — the Cluster Autoscaler
-pod assumes a dedicated, scoped IAM role via the cluster's OIDC
-provider, rather than inheriting broad node-level permissions.
-
-### 7. Jenkins setup
-
-Jenkins runs as a Docker container on its own EC2 instance (built
-manually per the challenge spec, not via Terraform). Inside the
-container: Docker CLI, AWS CLI, kubectl, and Helm are installed so the
-pipeline can build images, push to ECR, and deploy to EKS directly.
-
-Jenkins credentials store holds: a GitHub Personal Access Token
-(Username + Password kind, used for repo checkout and webhook auth) and
-relies on the EC2 instance's own IAM role for AWS API access — no static
-AWS access keys are stored in Jenkins.
-
-A GitHub webhook (`http://<jenkins-ip>:8080/github-webhook/`, JSON
-payload) triggers a new build automatically on every push to `main`.
+**Results:**
+- 27,755 hits, 99.81% availability, ~92.4 transactions/sec sustained over the run
+- The **frontend** ECS service scaled from 1 task up to its configured **max of 4 tasks**, all healthy in the ALB target group, as CPU utilization stayed above the 50% target
+- The **backend** service correctly stayed at 1 task throughout — `siege` performs raw HTTP GETs and does not execute the frontend's client-side JavaScript, so it never triggers the frontend's `fetch('/api')` call that would put load on the backend. This is an expected property of the test tool, not a defect in the autoscaling configuration.
+- After load stopped, the frontend service scaled back down to 1 task automatically once average CPU dropped back below target — no manual intervention needed in either direction.
 
 ---
 
-## Terraform Explanation
+## 7. GitOps Branch (Bonus)
 
-| File | Purpose |
-|---|---|
-| `provider.tf` | AWS + TLS provider configuration |
-| `main.tf` | VPC, subnets, EKS cluster, managed node group, Jenkins EC2, Elastic IP, OIDC provider |
-| `security.tf` | Security groups and IAM role policies (cluster, nodes, Jenkins, Cluster Autoscaler) |
-| `cluster-autoscaler.tf` | IRSA trust policy and least-privilege IAM policy for Cluster Autoscaler |
-| `variables.tf` | All input variables |
-| `outputs.tf` | ECR URL, cluster endpoint/name, Jenkins IP, VPC ID |
+A separate `gitops` branch replaces the Jenkins-triggered pipeline with GitHub Actions, so the app can be deployed without Jenkins involved at all — proving the deploy logic isn't accidentally tied to one specific CI server.
 
-Key design decisions:
+**Workflow file:** `.github/workflows/deploy.yml`, triggered on every push to the `gitops` branch. It performs the same steps as the Jenkins pipeline (build both Docker images, push to ECR, force a new ECS deployment on both services) but through GitHub's own runners instead of a self-hosted EC2 box.
 
-- **Least privilege everywhere.** Jenkins does not use `system:masters`
-  inside the cluster — it uses a custom ClusterRole scoped to only the
-  resources it needs to deploy. Cluster Autoscaler's IAM role is scoped
-  to only Auto Scaling Group and EC2 describe/resize actions, via IRSA,
-  not inherited node permissions.
-- **`lifecycle { ignore_changes = [ami] }`** on the Jenkins EC2 instance
-  prevents Terraform from replacing the whole instance every time AWS
-  publishes a newer Amazon Linux AMI — without this, every `terraform
-  plan` would show an unwanted instance replacement.
-- **State is local** for this challenge (not a remote S3 backend). In a
-  team/production setting this would move to an S3 backend with
-  DynamoDB locking so multiple engineers/CI systems share one source of
-  truth instead of risking state drift.
+**Authentication — OIDC instead of stored AWS keys:**
+Rather than storing long-lived AWS access keys as GitHub secrets, this branch uses OpenID Connect (OIDC) federation:
+- An **IAM OIDC identity provider** (`token.actions.githubusercontent.com`) tells AWS to trust short-lived, signed identity tokens issued by GitHub.
+- An **IAM role** (`github-actions-deploy-role`) has a trust policy that only allows that identity provider to assume it, and only when the token's `sub` (subject) claim matches this exact repo and branch — so no other GitHub repo, and no other branch of this repo, can assume the role.
+- Each workflow run requests a fresh, minutes-long token from GitHub, trades it for temporary AWS credentials via `sts:AssumeRoleWithWebIdentity`, and those credentials expire on their own. Nothing long-lived is ever stored in GitHub.
+
+**A real debugging note worth keeping:** GitHub's OIDC tokens embed immutable numeric IDs alongside the human-readable org/repo names in the `sub` claim (e.g. `repo:Drezzym6@160346145/devops-code-challenge1@1375181663:ref:refs/heads/gitops`), while AWS's own IAM console wizard still generates trust policies using the plain-name format (`repo:Drezzym6/devops-code-challenge1:ref:refs/heads/gitops`). That mismatch causes a generic `AccessDenied: Not authorized to perform sts:AssumeRoleWithWebIdentity` error even when everything looks correct. It was root-caused using AWS CloudTrail's Event history (searching for the `AssumeRoleWithWebIdentity` event) to see the exact identity string AWS actually received, then fixing the trust policy's `sub` condition to match it exactly.
 
 ---
 
-## Kubernetes & HPA Explanation
+## 8. Cleanup
 
-The Deployment runs 1 replica by default, with explicit CPU/memory
-`requests` and `limits` set on the pod spec — this is required for the
-HPA to calculate utilization percentages at all; without `requests` set,
-the HPA has no baseline to measure against.
-
-The HPA (`hpa.yaml`) watches average CPU utilization across all pods
-behind the `hello-world-app` Deployment, scaling between 1 and 3 pods
-when utilization crosses 50%. It has a built-in ~5 minute stabilization
-window before scaling back down, to avoid "flapping" from brief traffic
-dips.
-
-The Service is `type: LoadBalancer`, giving the app a public AWS-managed
-load balancer URL without needing to install the AWS Load Balancer
-Controller or configure Ingress — a simpler, equally valid choice for an
-app this size per the challenge spec's listed options.
-
----
-
-## CI/CD Pipeline (Jenkins)
-
-The `Jenkinsfile` runs four stages on every push to `main`:
-
-1. **Checkout** — pulls the latest commit from GitHub
-2. **Build Image** — builds the Docker image, tagged both with the
-   Jenkins `BUILD_NUMBER` (unique per build) and `latest`
-3. **Push to ECR** — authenticates to ECR and pushes both tags
-4. **Deploy to EKS** — updates kubeconfig, then runs `kubectl set image`
-   against the live Deployment with the new unique build-number tag, and
-   waits for `kubectl rollout status` to confirm the new pods are
-   healthy before finishing
-
-**Why the unique build-number tag matters:** `kubectl apply` only
-detects a change when the YAML text itself changes. If every build
-pushed the same `:latest` tag, `kubectl apply` would see no difference
-and silently skip the rollout — the cluster would keep running the old
-image even though a new one was pushed to ECR. Using `kubectl set
-image` with a unique tag per build forces Kubernetes to recognize a real
-change and roll out new pods.
-
----
-
-## Scaling Results
-
-### Pod-level (HPA)
-
-Under a sustained load test (`ab -c 250`), CPU utilization spiked to
-249% against the 50% target, and the HPA scaled the Deployment from 1 to
-3 replicas (its configured max) within about a minute. After the load
-test ended, CPU dropped back under 1%, and the HPA automatically scaled
-back down to 1 replica after its ~5 minute stabilization window.
-
-### Node-level (Cluster Autoscaler)
-
-To validate node-level autoscaling (not triggered by the default
-3-pod-max config, since 3 small pods comfortably fit on one node), the
-HPA's `maxReplicas` was temporarily raised to 20 for a heavier load test
-(`ab -c 300 -t 300`). Pod count climbed past the t3.small instance's
-practical pod-density limit, and Cluster Autoscaler automatically
-provisioned 2 additional nodes (bringing the cluster to 3 of its
-configured max of 4) to schedule the overflow pods. After the load test
-ended, Cluster Autoscaler drained and terminated both extra nodes one at
-a time, returning the cluster to its original single-node baseline.
-`maxReplicas` was then reverted to its production value of 3.
-
-See `screenshots/phase8/` for the full proof sequence (scale-up and
-scale-down, pod-level and node-level).
-
----
-
-## GitOps Branch (Phase 10)
-
-*(To be completed — see the `gitops` branch for GitHub Actions + Argo CD
-implementation, which builds and pushes images via OIDC and auto-syncs
-deployments to EKS without any direct `kubectl` access from CI.)*
-
----
-
-## Repository Access
-
-This is a private repository. The mentor has been added as a
-collaborator with read access.
+To avoid ongoing AWS charges after grading: `terraform destroy` from the `terraform/` directory, plus manual removal of the Jenkins EC2 instance's EBS volume and Elastic IP if not fully covered by destroy, and manual removal of any leftover ECR images.
