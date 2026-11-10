@@ -1,4 +1,4 @@
-# Tech Challenge 2: Hello World App on EKS with Jenkins CI/CD + Autoscaling
+# Hello World App on EKS with Jenkins CI/CD + Autoscaling
 
 A simple "Hello, World!" Node.js app, containerized, deployed to a fully
 autoscaling Kubernetes cluster on AWS EKS, with a Jenkins pipeline that
@@ -58,7 +58,7 @@ The cluster runs on a t3.small managed node group (1 node active by
 default, scalable to 4 via Cluster Autoscaler). Pods scale horizontally
 via an HPA (1 to 3 pods per node, triggered at 50% CPU utilization).
 Jenkins runs on its own EC2 instance, provisioned by Terraform alongside
-the rest of the infrastructure (unlike Tech Challenge 1, where the
+the rest of the infrastructure (unlike the previous ECS project, where the
 Jenkins instance was set up manually through the AWS Console). Only the
 Jenkins software itself — installing Docker, running the Jenkins
 container, configuring plugins/credentials — was done by hand once the
@@ -119,7 +119,7 @@ EC2 instance with an Elastic IP.
 ### 2. Connect kubectl to the new cluster
 
 ```bash
-aws eks update-kubeconfig --name tech-challenge-2-eks --region us-east-1
+aws eks update-kubeconfig --name hello-world-eks --region us-east-1
 kubectl get nodes
 ```
 
@@ -160,11 +160,11 @@ helm repo update
 
 helm install cluster-autoscaler autoscaler/cluster-autoscaler \
   --namespace kube-system \
-  --set autoDiscovery.clusterName=tech-challenge-2-eks \
+  --set autoDiscovery.clusterName=hello-world-eks \
   --set awsRegion=us-east-1 \
   --set rbac.serviceAccount.create=true \
   --set rbac.serviceAccount.name=cluster-autoscaler \
-  --set "rbac.serviceAccount.annotations.eks\.amazonaws\.com/role-arn=arn:aws:iam::730335365330:role/tech-challenge-2-cluster-autoscaler-role" \
+  --set "rbac.serviceAccount.annotations.eks\.amazonaws\.com/role-arn=arn:aws:iam::730335365330:role/hello-world-cluster-autoscaler-role" \
   --set extraArgs.balance-similar-node-groups=true \
   --set extraArgs.skip-nodes-with-system-pods=false
 ```
@@ -214,7 +214,7 @@ Key design decisions:
   prevents Terraform from replacing the whole instance every time AWS
   publishes a newer Amazon Linux AMI — without this, every `terraform
   plan` would show an unwanted instance replacement.
-- **State is local** for this challenge (not a remote S3 backend). In a
+- **State is local** for this project (not a remote S3 backend). In a
   team/production setting this would move to an S3 backend with
   DynamoDB locking so multiple engineers/CI systems share one source of
   truth instead of risking state drift.
@@ -237,7 +237,7 @@ dips.
 The Service is `type: LoadBalancer`, giving the app a public AWS-managed
 load balancer URL without needing to install the AWS Load Balancer
 Controller or configure Ingress — a simpler, equally valid choice for an
-app this size per the challenge spec's listed options.
+app this size per the project's listed options.
 
 ---
 
@@ -310,7 +310,7 @@ separated: GitHub Actions never holds direct cluster-access credentials
 
 1. **Checkout** the repo
 2. **Configure AWS credentials via OIDC** — assumes
-   `tech-challenge-2-github-actions-deploy-role` via
+   `hello-world-github-actions-deploy-role` via
    `sts:AssumeRoleWithWebIdentity`, no static AWS keys stored in GitHub.
    The IAM role's trust policy is scoped to this exact repo and branch,
    and its permissions policy is scoped to ECR push actions only.
@@ -355,5 +355,5 @@ See `screenshots/phase10/` for the full proof sequence.
 
 ## Repository Access
 
-This is a private repository. The mentor has been added as a
-collaborator with read access.
+This is a private repository, shared with a collaborator for
+review and feedback.

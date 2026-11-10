@@ -7,7 +7,7 @@ variable "aws_region" {
 variable "project_name" {
   description = "Name prefix used for all resources"
   type        = string
-  default     = "tech-challenge-2"
+  default     = "hello-world"
 }
 
 variable "node_instance_type" {
