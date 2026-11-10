@@ -1,3 +1,5 @@
+data "aws_caller_identity" "current" {}
+
 data "aws_iam_openid_connect_provider" "github_actions" {
   url = "https://token.actions.githubusercontent.com"
 }
@@ -52,7 +54,7 @@ resource "aws_iam_role_policy" "github_actions_ecr_push" {
           "ecr:UploadLayerPart",
           "ecr:CompleteLayerUpload"
         ]
-        Resource = "arn:aws:ecr:us-east-1:730335365330:repository/${var.project_name}-app"
+        Resource = "arn:aws:ecr:us-east-1:${data.aws_caller_identity.current.account_id}:repository/${var.project_name}-app"
       }
     ]
   })

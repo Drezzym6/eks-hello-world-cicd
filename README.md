@@ -164,7 +164,7 @@ helm install cluster-autoscaler autoscaler/cluster-autoscaler \
   --set awsRegion=us-east-1 \
   --set rbac.serviceAccount.create=true \
   --set rbac.serviceAccount.name=cluster-autoscaler \
-  --set "rbac.serviceAccount.annotations.eks\.amazonaws\.com/role-arn=arn:aws:iam::730335365330:role/hello-world-cluster-autoscaler-role" \
+  --set "rbac.serviceAccount.annotations.eks\.amazonaws\.com/role-arn=arn:aws:iam::<YOUR_AWS_ACCOUNT_ID>:role/hello-world-cluster-autoscaler-role" \
   --set extraArgs.balance-similar-node-groups=true \
   --set extraArgs.skip-nodes-with-system-pods=false
 ```

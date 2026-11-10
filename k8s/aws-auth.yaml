@@ -5,12 +5,12 @@ metadata:
   namespace: kube-system
 data:
   mapRoles: |
-    - rolearn: arn:aws:iam::730335365330:role/tech-challenge-2-eks-node-role
+    - rolearn: arn:aws:iam::<YOUR_AWS_ACCOUNT_ID>:role/hello-world-eks-node-role
       groups:
         - system:bootstrappers
         - system:nodes
       username: system:node:{{EC2PrivateDNSName}}
-    - rolearn: arn:aws:iam::730335365330:role/tech-challenge-2-jenkins-role
+    - rolearn: arn:aws:iam::<YOUR_AWS_ACCOUNT_ID>:role/hello-world-jenkins-role
       groups:
         - jenkins-deployers
       username: jenkins

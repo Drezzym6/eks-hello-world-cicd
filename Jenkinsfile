@@ -3,8 +3,8 @@ pipeline {
 
     environment {
         AWS_REGION     = 'us-east-1'
-        ECR_REPO       = '730335365330.dkr.ecr.us-east-1.amazonaws.com/tech-challenge-2-app'
-        CLUSTER_NAME   = 'tech-challenge-2-eks'
+        ECR_REPO       = '<YOUR_AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/hello-world-app'
+        CLUSTER_NAME   = 'hello-world-eks'
         IMAGE_TAG      = "${BUILD_NUMBER}"
     }
 
